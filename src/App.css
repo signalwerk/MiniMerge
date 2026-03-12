@@ -383,12 +383,16 @@
   justify-content: center;
   width: 100%;
   overflow: hidden;
-  border: 1px solid var(--color-gray-200);
+  &:after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border: 1px solid var(--color-gray-200);
+    transition: border 0.2s ease;
+  }
   background: var(--color-white);
   aspect-ratio: 1 / 1.414;
-  transition:
-    border-color 0.2s ease,
-    transform 0.2s ease;
+  transition: transform 0.2s ease;
 }
 
 .page-card--grid:hover .page-card__preview {
@@ -396,8 +400,15 @@
 }
 
 .page-card__preview--selected {
-  border: 3px solid var(--color-black);
+  position: relative;
   transform: scale(0.98);
+
+  &:after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border: 3px solid var(--color-black);
+  }
 }
 
 .page-card__preview-image {
