@@ -410,9 +410,7 @@ export default function App() {
                             className="page-card__preview-image"
                             draggable={false}
                           />
-                          {!isSelected && (
-                            <div className="page-card__preview-hover" />
-                          )}
+                          <div className="page-card__preview-hover" />
                         </div>
                         <div className="page-card__label">
                           {page.label
