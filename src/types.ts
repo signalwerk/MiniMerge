@@ -1,7 +1,13 @@
-export interface PdfFile {
+export type SupportedFileMimeType =
+  | "application/pdf"
+  | "image/jpeg"
+  | "image/png";
+
+export interface SourceFile {
   id: string;
   name: string;
   buffer: Uint8Array;
+  mimeType: SupportedFileMimeType;
 }
 
 export interface PdfPageNode {

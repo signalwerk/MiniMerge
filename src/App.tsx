@@ -8,13 +8,20 @@ import {
   Trash2,
   FileText,
 } from "lucide-react";
-import { parsePdfFile, generateMergedPdf } from "./pdfService";
-import type { PdfPageNode, PdfFile } from "./types";
+import {
+  FILE_INPUT_ACCEPT,
+  generateMergedPdf,
+  isSupportedInputFile,
+  parseInputFile,
+} from "./pdfService";
+import type { PdfPageNode, SourceFile } from "./types";
 import "./App.css";
 
 export default function App() {
   const [pages, setPages] = useState<PdfPageNode[]>([]);
-  const [pdfFiles, setPdfFiles] = useState<Record<string, PdfFile>>({});
+  const [sourceFiles, setSourceFiles] = useState<Record<string, SourceFile>>(
+    {},
+  );
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
 
   const [selectedPageIds, setSelectedPageIds] = useState<Set<string>>(
@@ -78,27 +85,27 @@ export default function App() {
       if (draggedPageId) return;
 
       const files = Array.from(e.dataTransfer.files).filter(
-        (f) => f.type === "application/pdf",
+        isSupportedInputFile,
       );
       if (files.length === 0) return;
 
       setIsProcessing(true);
       try {
-        const newFiles: Record<string, PdfFile> = {};
+        const newFiles: Record<string, SourceFile> = {};
         const newPages: PdfPageNode[] = [];
 
         for (const file of files) {
           const fileId = crypto.randomUUID();
-          const result = await parsePdfFile(file, fileId);
-          newFiles[fileId] = result.pdfFile;
+          const result = await parseInputFile(file, fileId);
+          newFiles[fileId] = result.sourceFile;
           newPages.push(...result.pages);
         }
 
-        setPdfFiles((prev) => ({ ...prev, ...newFiles }));
+        setSourceFiles((prev) => ({ ...prev, ...newFiles }));
         setPages((prev) => [...prev, ...newPages]);
       } catch (err) {
-        console.error("Error processing PDFs:", err);
-        alert("Error parsing PDF files. Check console for details.");
+        console.error("Error processing files:", err);
+        alert("Error parsing PDF/image files. Check console for details.");
       } finally {
         setIsProcessing(false);
       }
@@ -107,28 +114,26 @@ export default function App() {
   );
 
   const handleFileInput = async (e: ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []).filter(
-      (f) => f.type === "application/pdf",
-    );
+    const files = Array.from(e.target.files || []).filter(isSupportedInputFile);
     if (files.length === 0) return;
 
     setIsProcessing(true);
     try {
-      const newFiles: Record<string, PdfFile> = {};
+      const newFiles: Record<string, SourceFile> = {};
       const newPages: PdfPageNode[] = [];
 
       for (const file of files) {
         const fileId = crypto.randomUUID();
-        const result = await parsePdfFile(file, fileId);
-        newFiles[fileId] = result.pdfFile;
+        const result = await parseInputFile(file, fileId);
+        newFiles[fileId] = result.sourceFile;
         newPages.push(...result.pages);
       }
 
-      setPdfFiles((prev) => ({ ...prev, ...newFiles }));
+      setSourceFiles((prev) => ({ ...prev, ...newFiles }));
       setPages((prev) => [...prev, ...newPages]);
     } catch (err) {
-      console.error("Error processing PDFs:", err);
-      alert("Error parsing PDF files. Check console for details.");
+      console.error("Error processing files:", err);
+      alert("Error parsing PDF/image files. Check console for details.");
     } finally {
       setIsProcessing(false);
     }
@@ -175,7 +180,7 @@ export default function App() {
     if (pages.length === 0) return;
     setIsProcessing(true);
     try {
-      const mergedPdfUint8Array = await generateMergedPdf(pages, pdfFiles);
+      const mergedPdfUint8Array = await generateMergedPdf(pages, sourceFiles);
       const blob = new Blob([mergedPdfUint8Array], { type: "application/pdf" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -326,13 +331,15 @@ export default function App() {
             className={`dropzone ${isDraggingFile ? "dropzone--active" : ""}`}
           >
             {isProcessing ? (
-              <div className="dropzone__processing">Processing PDFs...</div>
+              <div className="dropzone__processing">Processing files...</div>
             ) : (
               <>
                 <Upload
                   className={`dropzone__icon ${isDraggingFile ? "dropzone__icon--active" : ""}`}
                 />
-                <h2 className="dropzone__title">Drag and drop PDFs here</h2>
+                <h2 className="dropzone__title">
+                  Drag and drop PDFs, JPEGs or PNGs here
+                </h2>
                 <p className="dropzone__description">
                   Or select files from your computer (Multiple allowed)
                 </p>
@@ -341,7 +348,7 @@ export default function App() {
                   <input
                     type="file"
                     multiple
-                    accept=".pdf"
+                    accept={FILE_INPUT_ACCEPT}
                     className="app__file-input"
                     onChange={handleFileInput}
                   />
@@ -355,7 +362,7 @@ export default function App() {
               <div className="app__overlay">
                 <div className="app__overlay-content">
                   <Upload className="app__overlay-icon" />
-                  Drop PDFs to append
+                  Drop PDFs, JPEGs or PNGs to append
                 </div>
               </div>
             )}
@@ -364,7 +371,7 @@ export default function App() {
               {pages.map((page) => {
                 const isSelected = selectedPageIds.has(page.id);
                 const isDropTarget = dropTargetId === page.id;
-                const pdfFile = pdfFiles[page.fileId];
+                const sourceFile = sourceFiles[page.fileId];
                 const pageCardClassName = [
                   "page-card",
                   `page-card--${viewMode}`,
@@ -403,7 +410,12 @@ export default function App() {
 
                     {viewMode === "grid" ? (
                       <>
-                        <div className={previewClassName} style={{ aspectRatio: `${page.width} / ${page.height}` }}>
+                        <div
+                          className={previewClassName}
+                          style={{
+                            aspectRatio: `${page.width} / ${page.height}`,
+                          }}
+                        >
                           <img
                             src={page.thumbnailUrl}
                             alt={`Page ${page.pageIndex + 1}`}
@@ -419,14 +431,19 @@ export default function App() {
                         </div>
                         <div
                           className="page-card__filename"
-                          title={pdfFile?.name}
+                          title={sourceFile?.name}
                         >
-                          {pdfFile?.name}
+                          {sourceFile?.name}
                         </div>
                       </>
                     ) : (
                       <>
-                        <div className="page-card__list-preview" style={{ aspectRatio: `${page.width} / ${page.height}` }}>
+                        <div
+                          className="page-card__list-preview"
+                          style={{
+                            aspectRatio: `${page.width} / ${page.height}`,
+                          }}
+                        >
                           <img
                             src={page.thumbnailUrl}
                             alt="Thumbnail"
@@ -436,7 +453,7 @@ export default function App() {
                         </div>
                         <div className="page-card__meta">
                           <div className="page-card__meta-title">
-                            {pdfFile?.name}
+                            {sourceFile?.name}
                           </div>
                           <div className="page-card__meta-subtitle">
                             Page {page.label ? page.label : page.pageIndex + 1}
@@ -449,12 +466,12 @@ export default function App() {
               })}
             </div>
 
-            <label className="app__fab" title="Add PDF">
+            <label className="app__fab" title="Add files">
               <Upload className="app__fab-icon" />
               <input
                 type="file"
                 multiple
-                accept=".pdf"
+                accept={FILE_INPUT_ACCEPT}
                 className="app__file-input"
                 onChange={handleFileInput}
               />
