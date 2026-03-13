@@ -1035,6 +1035,7 @@ export default function App() {
       selectSinglePage(pageId);
     }
     e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", pageId);
   };
 
   const handlePageDragOver = (

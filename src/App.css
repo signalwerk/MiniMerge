@@ -293,7 +293,6 @@
   cursor: pointer;
   user-select: none;
   touch-action: manipulation;
-  -webkit-user-drag: none;
   transition:
     background-color 0.2s ease,
     border-color 0.2s ease,
@@ -479,6 +478,7 @@
   height: 100%;
   object-fit: contain;
   pointer-events: none;
+  -webkit-user-drag: none;
 }
 
 .page-card__preview-hover {
