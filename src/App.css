@@ -187,9 +187,15 @@
   border: 2px dashed var(--color-gray-200);
   border-radius: 1rem;
   background: rgba(249, 250, 251, 0.5);
+  cursor: pointer;
   transition:
     border-color 0.2s ease,
     background-color 0.2s ease;
+}
+
+.dropzone:focus-visible {
+  outline: 3px solid var(--color-black);
+  outline-offset: 4px;
 }
 
 .dropzone:hover {

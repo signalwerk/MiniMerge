@@ -1,5 +1,10 @@
-import { useState, useCallback, useEffect } from "react";
-import type { ChangeEvent, DragEvent, MouseEvent } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
+import type {
+  ChangeEvent,
+  DragEvent,
+  KeyboardEvent as ReactKeyboardEvent,
+  MouseEvent,
+} from "react";
 import {
   Upload,
   Grid as GridIcon,
@@ -17,77 +22,79 @@ import {
 import type { PdfPageNode, SourceFile } from "./types";
 import "./App.css";
 
+function clampInsertionIndex(index: number, length: number): number {
+  return Math.max(0, Math.min(index, length));
+}
+
+function isFileDrag(dataTransfer: DataTransfer | null): boolean {
+  return dataTransfer
+    ? Array.from(dataTransfer.types).includes("Files")
+    : false;
+}
+
+function getSupportedDraggedFiles(dataTransfer: DataTransfer): File[] {
+  return Array.from(dataTransfer.files).filter(isSupportedInputFile);
+}
+
+function moveSelectedPages(
+  currentPages: PdfPageNode[],
+  selectedPageIds: Set<string>,
+  insertionIndex: number,
+): PdfPageNode[] {
+  const pagesToMove = currentPages.filter((page) => selectedPageIds.has(page.id));
+  if (pagesToMove.length === 0) {
+    return currentPages;
+  }
+
+  const remainingPages = currentPages.filter(
+    (page) => !selectedPageIds.has(page.id),
+  );
+  const selectedPagesBeforeInsertion = currentPages
+    .slice(0, insertionIndex)
+    .filter((page) => selectedPageIds.has(page.id)).length;
+  const adjustedInsertionIndex = clampInsertionIndex(
+    insertionIndex - selectedPagesBeforeInsertion,
+    remainingPages.length,
+  );
+  const reorderedPages = [...remainingPages];
+  reorderedPages.splice(adjustedInsertionIndex, 0, ...pagesToMove);
+  return reorderedPages;
+}
+
 export default function App() {
   const [pages, setPages] = useState<PdfPageNode[]>([]);
   const [sourceFiles, setSourceFiles] = useState<Record<string, SourceFile>>(
     {},
   );
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
-
   const [selectedPageIds, setSelectedPageIds] = useState<Set<string>>(
     new Set(),
   );
   const [lastSelectedId, setLastSelectedId] = useState<string | null>(null);
-
   const [isProcessing, setIsProcessing] = useState(false);
   const [isDraggingFile, setIsDraggingFile] = useState(false);
-
   const [draggedPageId, setDraggedPageId] = useState<string | null>(null);
-  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
-  const [dropPosition, setDropPosition] = useState<"before" | "after" | null>(
+  const [dropInsertionIndex, setDropInsertionIndex] = useState<number | null>(
     null,
   );
+  const emptyFileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleRemoveSelected = useCallback(() => {
-    setPages((prev) => prev.filter((p) => !selectedPageIds.has(p.id)));
+  const clearSelection = useCallback(() => {
     setSelectedPageIds(new Set());
     setLastSelectedId(null);
-  }, [selectedPageIds]);
+  }, []);
 
-  useEffect(() => {
-    const handleKeyDown = (e: globalThis.KeyboardEvent) => {
-      if (
-        e.target instanceof HTMLInputElement ||
-        e.target instanceof HTMLTextAreaElement
-      )
-        return;
-
-      if (
-        (e.key === "Backspace" || e.key === "Delete") &&
-        selectedPageIds.size > 0
-      ) {
-        handleRemoveSelected();
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [handleRemoveSelected, selectedPageIds]);
-
-  const handleDragOverFile = useCallback(
-    (e: DragEvent<HTMLDivElement>) => {
-      e.preventDefault();
-      if (draggedPageId) return;
-      setIsDraggingFile(true);
-    },
-    [draggedPageId],
-  );
-
-  const handleDragLeaveFile = useCallback((e: DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
+  const resetDragState = useCallback(() => {
+    setDraggedPageId(null);
+    setDropInsertionIndex(null);
     setIsDraggingFile(false);
   }, []);
 
-  const handleDropFile = useCallback(
-    async (e: DragEvent<HTMLDivElement>) => {
-      e.preventDefault();
-      setIsDraggingFile(false);
-
-      if (draggedPageId) return;
-
-      const files = Array.from(e.dataTransfer.files).filter(
-        isSupportedInputFile,
-      );
-      if (files.length === 0) return;
+  const processIncomingFiles = useCallback(
+    async (files: File[], insertionIndex?: number | null) => {
+      if (files.length === 0) {
+        return;
+      }
 
       setIsProcessing(true);
       try {
@@ -102,7 +109,15 @@ export default function App() {
         }
 
         setSourceFiles((prev) => ({ ...prev, ...newFiles }));
-        setPages((prev) => [...prev, ...newPages]);
+        setPages((prev) => {
+          const insertAt =
+            insertionIndex == null
+              ? prev.length
+              : clampInsertionIndex(insertionIndex, prev.length);
+          const nextPages = [...prev];
+          nextPages.splice(insertAt, 0, ...newPages);
+          return nextPages;
+        });
       } catch (err) {
         console.error("Error processing files:", err);
         alert("Error parsing PDF/image files. Check console for details.");
@@ -110,85 +125,184 @@ export default function App() {
         setIsProcessing(false);
       }
     },
+    [],
+  );
+
+  const handleRemoveSelected = useCallback(() => {
+    setPages((prev) => prev.filter((page) => !selectedPageIds.has(page.id)));
+    clearSelection();
+  }, [clearSelection, selectedPageIds]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: globalThis.KeyboardEvent) => {
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement
+      ) {
+        return;
+      }
+
+      if (
+        (e.key === "Backspace" || e.key === "Delete") &&
+        selectedPageIds.size > 0
+      ) {
+        handleRemoveSelected();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [handleRemoveSelected, selectedPageIds]);
+
+  const openEmptyFilePicker = useCallback(() => {
+    if (!isProcessing) {
+      emptyFileInputRef.current?.click();
+    }
+  }, [isProcessing]);
+
+  const handleEmptyDropzoneKeyDown = useCallback(
+    (e: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        openEmptyFilePicker();
+      }
+    },
+    [openEmptyFilePicker],
+  );
+
+  const handleDragOverFile = useCallback(
+    (e: DragEvent<HTMLDivElement>) => {
+      if (draggedPageId || !isFileDrag(e.dataTransfer)) {
+        return;
+      }
+
+      e.preventDefault();
+      setIsDraggingFile(true);
+
+      const target = e.target as HTMLElement;
+      if (!target.closest(".page-card")) {
+        setDropInsertionIndex(pages.length);
+      }
+    },
+    [draggedPageId, pages.length],
+  );
+
+  const handleDragLeaveFile = useCallback(
+    (e: DragEvent<HTMLDivElement>) => {
+      const nextTarget = e.relatedTarget;
+      if (nextTarget instanceof Node && e.currentTarget.contains(nextTarget)) {
+        return;
+      }
+
+      if (!draggedPageId) {
+        setIsDraggingFile(false);
+        setDropInsertionIndex(null);
+      }
+    },
     [draggedPageId],
+  );
+
+  const handleRootDrop = useCallback(
+    async (e: DragEvent<HTMLDivElement>) => {
+      e.preventDefault();
+
+      if (draggedPageId) {
+        resetDragState();
+        return;
+      }
+
+      const files = getSupportedDraggedFiles(e.dataTransfer);
+      if (files.length === 0) {
+        resetDragState();
+        return;
+      }
+
+      await processIncomingFiles(files, dropInsertionIndex ?? pages.length);
+      resetDragState();
+    },
+    [
+      draggedPageId,
+      dropInsertionIndex,
+      pages.length,
+      processIncomingFiles,
+      resetDragState,
+    ],
   );
 
   const handleFileInput = async (e: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []).filter(isSupportedInputFile);
-    if (files.length === 0) return;
-
-    setIsProcessing(true);
-    try {
-      const newFiles: Record<string, SourceFile> = {};
-      const newPages: PdfPageNode[] = [];
-
-      for (const file of files) {
-        const fileId = crypto.randomUUID();
-        const result = await parseInputFile(file, fileId);
-        newFiles[fileId] = result.sourceFile;
-        newPages.push(...result.pages);
-      }
-
-      setSourceFiles((prev) => ({ ...prev, ...newFiles }));
-      setPages((prev) => [...prev, ...newPages]);
-    } catch (err) {
-      console.error("Error processing files:", err);
-      alert("Error parsing PDF/image files. Check console for details.");
-    } finally {
-      setIsProcessing(false);
-    }
+    await processIncomingFiles(files);
     e.target.value = "";
   };
 
   const handlePageClick = (e: MouseEvent, pageId: string) => {
     e.preventDefault();
-    const newSelected = new Set(selectedPageIds);
+    const nextSelectedIds = new Set(selectedPageIds);
 
     if (e.shiftKey && lastSelectedId) {
-      const lastIdx = pages.findIndex((p) => p.id === lastSelectedId);
-      const currIdx = pages.findIndex((p) => p.id === pageId);
+      const lastIndex = pages.findIndex((page) => page.id === lastSelectedId);
+      const currentIndex = pages.findIndex((page) => page.id === pageId);
 
-      if (lastIdx === -1 || currIdx === -1) return;
+      if (lastIndex === -1 || currentIndex === -1) {
+        return;
+      }
 
-      const start = Math.min(lastIdx, currIdx);
-      const end = Math.max(lastIdx, currIdx);
+      const start = Math.min(lastIndex, currentIndex);
+      const end = Math.max(lastIndex, currentIndex);
 
       if (!e.metaKey && !e.ctrlKey) {
-        newSelected.clear();
+        nextSelectedIds.clear();
       }
 
       for (let i = start; i <= end; i += 1) {
-        newSelected.add(pages[i].id);
+        nextSelectedIds.add(pages[i].id);
       }
     } else if (e.metaKey || e.ctrlKey) {
-      if (newSelected.has(pageId)) {
-        newSelected.delete(pageId);
+      if (nextSelectedIds.has(pageId)) {
+        nextSelectedIds.delete(pageId);
       } else {
-        newSelected.add(pageId);
+        nextSelectedIds.add(pageId);
       }
       setLastSelectedId(pageId);
     } else {
-      newSelected.clear();
-      newSelected.add(pageId);
+      nextSelectedIds.clear();
+      nextSelectedIds.add(pageId);
       setLastSelectedId(pageId);
     }
 
-    setSelectedPageIds(newSelected);
+    setSelectedPageIds(nextSelectedIds);
   };
+
+  const handleContentMouseDown = useCallback(
+    (e: MouseEvent<HTMLDivElement>) => {
+      if (e.button !== 0) {
+        return;
+      }
+
+      const target = e.target as HTMLElement;
+      if (target.closest(".page-card") || target.closest(".app__fab")) {
+        return;
+      }
+
+      clearSelection();
+    },
+    [clearSelection],
+  );
 
   const handleDownload = async () => {
     if (pages.length === 0) return;
+
     setIsProcessing(true);
     try {
       const mergedPdfUint8Array = await generateMergedPdf(pages, sourceFiles);
       const blob = new Blob([mergedPdfUint8Array], { type: "application/pdf" });
       const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "merged.pdf";
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = "merged.pdf";
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
       URL.revokeObjectURL(url);
     } catch (err) {
       console.error("Error merging PDF:", err);
@@ -212,61 +326,62 @@ export default function App() {
 
   const handlePageDragOver = (
     e: DragEvent<HTMLDivElement>,
-    targetId: string,
+    pageIndex: number,
   ) => {
+    const hasPageDrag = draggedPageId !== null;
+    const hasFileDrag = !hasPageDrag && isFileDrag(e.dataTransfer);
+    if (!hasPageDrag && !hasFileDrag) {
+      return;
+    }
+
     e.preventDefault();
     e.stopPropagation();
-    e.dataTransfer.dropEffect = "move";
-
-    if (selectedPageIds.has(targetId)) {
-      setDropTargetId(null);
-      setDropPosition(null);
-      return;
+    if (hasFileDrag) {
+      setIsDraggingFile(true);
     }
 
     const rect = e.currentTarget.getBoundingClientRect();
-    if (viewMode === "list") {
-      const midY = rect.top + rect.height / 2;
-      setDropPosition(e.clientY < midY ? "before" : "after");
-    } else {
-      const midX = rect.left + rect.width / 2;
-      setDropPosition(e.clientX < midX ? "before" : "after");
-    }
+    const insertBefore =
+      viewMode === "list"
+        ? e.clientY < rect.top + rect.height / 2
+        : e.clientX < rect.left + rect.width / 2;
 
-    setDropTargetId(targetId);
+    setDropInsertionIndex(insertBefore ? pageIndex : pageIndex + 1);
   };
 
-  const handlePageDrop = (e: DragEvent<HTMLDivElement>, targetId: string) => {
-    e.preventDefault();
-    e.stopPropagation();
+  const handlePageDrop = useCallback(
+    async (e: DragEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      e.stopPropagation();
 
-    if (!draggedPageId || selectedPageIds.has(targetId) || !dropPosition) {
-      resetDragStyles();
-      return;
-    }
+      if (draggedPageId) {
+        if (dropInsertionIndex !== null) {
+          setPages((prev) =>
+            moveSelectedPages(prev, selectedPageIds, dropInsertionIndex),
+          );
+        }
+        resetDragState();
+        return;
+      }
 
-    setPages((prev) => {
-      const newPages = [...prev];
-      const itemsToMove = newPages.filter((p) => selectedPageIds.has(p.id));
-      const itemsToKeep = newPages.filter((p) => !selectedPageIds.has(p.id));
+      const files = getSupportedDraggedFiles(e.dataTransfer);
+      if (files.length === 0) {
+        resetDragState();
+        return;
+      }
 
-      const targetIndex = itemsToKeep.findIndex((p) => p.id === targetId);
-      if (targetIndex === -1) return prev;
-
-      const insertIndex =
-        dropPosition === "before" ? targetIndex : targetIndex + 1;
-      itemsToKeep.splice(insertIndex, 0, ...itemsToMove);
-      return itemsToKeep;
-    });
-
-    resetDragStyles();
-  };
-
-  const resetDragStyles = () => {
-    setDraggedPageId(null);
-    setDropTargetId(null);
-    setDropPosition(null);
-  };
+      await processIncomingFiles(files, dropInsertionIndex ?? pages.length);
+      resetDragState();
+    },
+    [
+      draggedPageId,
+      dropInsertionIndex,
+      pages.length,
+      processIncomingFiles,
+      resetDragState,
+      selectedPageIds,
+    ],
+  );
 
   const pageCollectionClassName = `app__pages app__pages--${viewMode}`;
 
@@ -275,7 +390,7 @@ export default function App() {
       className="app"
       onDragOver={handleDragOverFile}
       onDragLeave={handleDragLeaveFile}
-      onDrop={handleDropFile}
+      onDrop={handleRootDrop}
     >
       <header className="app__header">
         <h1 className="app__brand">
@@ -329,6 +444,10 @@ export default function App() {
         {pages.length === 0 ? (
           <div
             className={`dropzone ${isDraggingFile ? "dropzone--active" : ""}`}
+            onClick={openEmptyFilePicker}
+            onKeyDown={handleEmptyDropzoneKeyDown}
+            role="button"
+            tabIndex={0}
           >
             {isProcessing ? (
               <div className="dropzone__processing">Processing files...</div>
@@ -343,35 +462,37 @@ export default function App() {
                 <p className="dropzone__description">
                   Or select files from your computer (Multiple allowed)
                 </p>
-                <label className="dropzone__button">
-                  Browse Files
-                  <input
-                    type="file"
-                    multiple
-                    accept={FILE_INPUT_ACCEPT}
-                    className="app__file-input"
-                    onChange={handleFileInput}
-                  />
-                </label>
+                <div className="dropzone__button">Browse Files</div>
+                <input
+                  ref={emptyFileInputRef}
+                  type="file"
+                  multiple
+                  accept={FILE_INPUT_ACCEPT}
+                  className="app__file-input"
+                  onChange={handleFileInput}
+                />
               </>
             )}
           </div>
         ) : (
-          <div className="app__content">
+          <div className="app__content" onMouseDown={handleContentMouseDown}>
             {isDraggingFile && (
               <div className="app__overlay">
                 <div className="app__overlay-content">
                   <Upload className="app__overlay-icon" />
-                  Drop PDFs, JPEGs or PNGs to append
+                  Drop PDFs, JPEGs or PNGs to insert
                 </div>
               </div>
             )}
 
             <div className={pageCollectionClassName}>
-              {pages.map((page) => {
+              {pages.map((page, index) => {
                 const isSelected = selectedPageIds.has(page.id);
-                const isDropTarget = dropTargetId === page.id;
                 const sourceFile = sourceFiles[page.fileId];
+                const showIndicatorBefore = dropInsertionIndex === index;
+                const showIndicatorAfter =
+                  index === pages.length - 1 &&
+                  dropInsertionIndex === pages.length;
                 const pageCardClassName = [
                   "page-card",
                   `page-card--${viewMode}`,
@@ -391,18 +512,18 @@ export default function App() {
                     key={page.id}
                     draggable
                     onDragStart={(e) => handlePageDragStart(e, page.id)}
-                    onDragOver={(e) => handlePageDragOver(e, page.id)}
-                    onDrop={(e) => handlePageDrop(e, page.id)}
-                    onDragEnd={resetDragStyles}
+                    onDragOver={(e) => handlePageDragOver(e, index)}
+                    onDrop={handlePageDrop}
+                    onDragEnd={resetDragState}
                     onClick={(e) => handlePageClick(e, page.id)}
                     className={pageCardClassName}
                   >
-                    {isDropTarget && dropPosition === "before" && (
+                    {showIndicatorBefore && (
                       <div
                         className={`page-card__drop-indicator page-card__drop-indicator--before page-card__drop-indicator--${viewMode}`}
                       />
                     )}
-                    {isDropTarget && dropPosition === "after" && (
+                    {showIndicatorAfter && (
                       <div
                         className={`page-card__drop-indicator page-card__drop-indicator--after page-card__drop-indicator--${viewMode}`}
                       />
