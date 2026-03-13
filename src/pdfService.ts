@@ -4,6 +4,7 @@ import type { PdfPageNode, SourceFile, SupportedFileMimeType } from "./types";
 const PDF_MIME_TYPE = "application/pdf";
 const JPEG_MIME_TYPE = "image/jpeg";
 const PNG_MIME_TYPE = "image/png";
+const PDF_GENERATOR_URL = "https://minimerge.signalwerk.ch/";
 
 export const FILE_INPUT_ACCEPT =
   ".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg";
@@ -327,6 +328,14 @@ export async function generateMergedPdf(
 
   try {
     const finalPdf = new mupdf.PDFDocument();
+    finalPdf.setMetaData(
+      mupdf.Document.META_INFO_CREATOR,
+      `MiniMerge ${PDF_GENERATOR_URL}`,
+    );
+    finalPdf.setMetaData(
+      mupdf.Document.META_INFO_PRODUCER,
+      `MiniMerge ${PDF_GENERATOR_URL}`,
+    );
 
     for (const pageNode of pages) {
       const sourceFile = sourceFiles[pageNode.fileId];
