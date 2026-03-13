@@ -263,37 +263,6 @@
   background: var(--color-gray-800);
 }
 
-.app__overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 20;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin: 1.5rem;
-  border: 4px dashed var(--color-black);
-  border-radius: 1rem;
-  background: rgba(255, 255, 255, 0.8);
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
-  pointer-events: none;
-}
-
-.app__overlay-content {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  font-size: 1.5rem;
-  font-weight: 600;
-  text-align: center;
-}
-
-.app__overlay-icon {
-  width: 2.5rem;
-  height: 2.5rem;
-  flex: 0 0 auto;
-}
-
 .app__pages {
   padding-bottom: 5rem;
 }
@@ -350,14 +319,35 @@
 .page-card__drop-indicator {
   position: absolute;
   z-index: 10;
-  background: var(--color-black);
   pointer-events: none;
+}
+
+.page-card__drop-indicator-line {
+  position: absolute;
+  background: var(--color-black);
+  box-shadow: var(--shadow-sm);
+}
+
+.page-card__drop-indicator-label {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  padding: 0.35rem 0.65rem;
+  border-radius: 9999px;
+  background: var(--color-black);
+  color: var(--color-white);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  box-shadow: var(--shadow-md);
 }
 
 .page-card__drop-indicator--grid {
   top: 0;
   bottom: 1.5rem;
-  width: 0.25rem;
+  width: 0;
 }
 
 .page-card__drop-indicator--grid.page-card__drop-indicator--before {
@@ -368,10 +358,24 @@
   right: -0.75rem;
 }
 
+.page-card__drop-indicator--grid .page-card__drop-indicator-line {
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 0.25rem;
+  transform: translateX(-50%);
+}
+
+.page-card__drop-indicator--grid .page-card__drop-indicator-label {
+  top: 0;
+  left: 50%;
+  transform: translate(-50%, calc(-100% - 0.5rem));
+}
+
 .page-card__drop-indicator--list {
   left: 0;
   right: 0;
-  height: 0.25rem;
+  height: 0;
 }
 
 .page-card__drop-indicator--list.page-card__drop-indicator--before {
@@ -380,6 +384,20 @@
 
 .page-card__drop-indicator--list.page-card__drop-indicator--after {
   bottom: -0.25rem;
+}
+
+.page-card__drop-indicator--list .page-card__drop-indicator-line {
+  top: 50%;
+  left: 0;
+  right: 0;
+  height: 0.25rem;
+  transform: translateY(-50%);
+}
+
+.page-card__drop-indicator--list .page-card__drop-indicator-label {
+  top: 50%;
+  left: 1rem;
+  transform: translateY(-50%);
 }
 
 .page-card__preview {
@@ -570,13 +588,9 @@
     gap: 0.75rem;
   }
 
-  .app__overlay {
-    margin: 1rem;
-  }
-
-  .app__overlay-content {
-    flex-direction: column;
-    font-size: 1.25rem;
+  .page-card__drop-indicator--grid .page-card__drop-indicator-label {
+    left: 0;
+    transform: translateY(calc(-100% - 0.5rem));
   }
 
   .app__fab {

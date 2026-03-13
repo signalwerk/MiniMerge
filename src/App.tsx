@@ -133,12 +133,31 @@ export default function App() {
     clearSelection();
   }, [clearSelection, selectedPageIds]);
 
+  const selectAllPages = useCallback(() => {
+    if (pages.length === 0) {
+      return;
+    }
+
+    setSelectedPageIds(new Set(pages.map((page) => page.id)));
+    setLastSelectedId(pages[pages.length - 1]?.id ?? null);
+  }, [pages]);
+
   useEffect(() => {
     const handleKeyDown = (e: globalThis.KeyboardEvent) => {
       if (
         e.target instanceof HTMLInputElement ||
-        e.target instanceof HTMLTextAreaElement
+        e.target instanceof HTMLTextAreaElement ||
+        e.target instanceof HTMLSelectElement ||
+        (e.target instanceof HTMLElement && e.target.isContentEditable)
       ) {
+        return;
+      }
+
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "a") {
+        if (pages.length > 0) {
+          e.preventDefault();
+          selectAllPages();
+        }
         return;
       }
 
@@ -152,7 +171,7 @@ export default function App() {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [handleRemoveSelected, selectedPageIds]);
+  }, [handleRemoveSelected, pages.length, selectAllPages, selectedPageIds]);
 
   const openEmptyFilePicker = useCallback(() => {
     if (!isProcessing) {
@@ -476,15 +495,6 @@ export default function App() {
           </div>
         ) : (
           <div className="app__content" onMouseDown={handleContentMouseDown}>
-            {isDraggingFile && (
-              <div className="app__overlay">
-                <div className="app__overlay-content">
-                  <Upload className="app__overlay-icon" />
-                  Drop PDFs, JPEGs or PNGs to insert
-                </div>
-              </div>
-            )}
-
             <div className={pageCollectionClassName}>
               {pages.map((page, index) => {
                 const isSelected = selectedPageIds.has(page.id);
@@ -521,12 +531,26 @@ export default function App() {
                     {showIndicatorBefore && (
                       <div
                         className={`page-card__drop-indicator page-card__drop-indicator--before page-card__drop-indicator--${viewMode}`}
-                      />
+                      >
+                        <div className="page-card__drop-indicator-line" />
+                        {isDraggingFile && (
+                          <div className="page-card__drop-indicator-label">
+                            Insert files here
+                          </div>
+                        )}
+                      </div>
                     )}
                     {showIndicatorAfter && (
                       <div
                         className={`page-card__drop-indicator page-card__drop-indicator--after page-card__drop-indicator--${viewMode}`}
-                      />
+                      >
+                        <div className="page-card__drop-indicator-line" />
+                        {isDraggingFile && (
+                          <div className="page-card__drop-indicator-label">
+                            Insert files here
+                          </div>
+                        )}
+                      </div>
                     )}
 
                     {viewMode === "grid" ? (
