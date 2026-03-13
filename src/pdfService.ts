@@ -79,7 +79,10 @@ function getPageLabel(page: mupdf.Page): string {
 }
 
 function renderPdfPageThumbnail(page: mupdf.Page): string {
-  const scale = 0.5;
+  return renderPdfPageImage(page, 0.5);
+}
+
+function renderPdfPageImage(page: mupdf.Page, scale: number): string {
   const matrix = mupdf.Matrix.scale(scale, scale);
   const colorSpace = mupdf.ColorSpace.DeviceRGB;
   const pixmap = page.toPixmap(matrix, colorSpace, false);
@@ -193,10 +196,7 @@ function parsePdfDocument(buffer: Uint8Array, fileId: string): PdfPageNode[] {
   }
 }
 
-function parseImageDocument(
-  buffer: Uint8Array,
-  fileId: string,
-): PdfPageNode[] {
+function parseImageDocument(buffer: Uint8Array, fileId: string): PdfPageNode[] {
   const image = new mupdf.Image(buffer);
 
   try {
@@ -290,6 +290,32 @@ export async function generatePageThumbnails(
     for (const doc of Object.values(openedDocs)) {
       doc.destroy();
     }
+  }
+}
+
+export async function generatePagePreview(
+  page: PdfPageNode,
+  sourceFiles: Record<string, SourceFile>,
+): Promise<string | null> {
+  const sourceFile = sourceFiles[page.fileId];
+  if (!sourceFile) {
+    return null;
+  }
+
+  if (sourceFile.mimeType !== PDF_MIME_TYPE) {
+    return createBlobUrl(sourceFile.buffer, sourceFile.mimeType);
+  }
+
+  const doc = mupdf.Document.openDocument(sourceFile.buffer, PDF_MIME_TYPE);
+  try {
+    const pdfPage = doc.loadPage(page.pageIndex);
+    try {
+      return renderPdfPageImage(pdfPage, 1.5);
+    } finally {
+      pdfPage.destroy();
+    }
+  } finally {
+    doc.destroy();
   }
 }
 

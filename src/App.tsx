@@ -18,10 +18,12 @@ import {
   Download,
   Trash2,
   FileText,
+  X,
 } from "lucide-react";
 import {
   FILE_INPUT_ACCEPT,
   generateMergedPdf,
+  generatePagePreview,
   generatePageThumbnails,
   isSupportedInputFile,
   parseInputFile,
@@ -141,7 +143,7 @@ function moveSelectedPages(
   return reorderedPages;
 }
 
-const THUMBNAIL_FLUSH_INTERVAL_MS = 300;
+const THUMBNAIL_FLUSH_INTERVAL_MS = 500;
 const THUMBNAIL_RENDER_BATCH_SIZE = 8;
 
 export default function App() {
@@ -165,13 +167,78 @@ export default function App() {
   const [dropInsertionIndex, setDropInsertionIndex] = useState<number | null>(
     null,
   );
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+  const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
+  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const emptyFileInputRef = useRef<HTMLInputElement>(null);
   const pageCollectionRef = useRef<HTMLDivElement>(null);
   const pendingThumbnailPageIdsRef = useRef<Set<string>>(new Set());
   const isThumbnailGenerationActiveRef = useRef(false);
   const pagesRef = useRef<PdfPageNode[]>([]);
+  const previewImageUrlsRef = useRef<Record<string, string>>({});
 
   pagesRef.current = pages;
+
+  const selectedSinglePageId =
+    selectedPageIds.size === 1
+      ? (selectedPageIds.values().next().value ?? null)
+      : null;
+  const selectedSinglePage =
+    selectedSinglePageId !== null
+      ? (pages.find((page) => page.id === selectedSinglePageId) ?? null)
+      : null;
+
+  const selectSinglePage = useCallback((pageId: string) => {
+    const nextSelectedIds = new Set([pageId]);
+    setSelectedPageIds(nextSelectedIds);
+    setSelectionAnchorId(pageId);
+    setSelectionAnchorSnapshotIds(nextSelectedIds);
+  }, []);
+
+  const closePreview = useCallback(() => {
+    setIsPreviewOpen(false);
+    setIsPreviewLoading(false);
+  }, []);
+
+  const openPreview = useCallback(() => {
+    if (!selectedSinglePageId) {
+      return;
+    }
+
+    setIsPreviewOpen(true);
+  }, [selectedSinglePageId]);
+
+  const openPreviewForPage = useCallback(
+    (pageId: string) => {
+      selectSinglePage(pageId);
+      setIsPreviewOpen(true);
+    },
+    [selectSinglePage],
+  );
+
+  const navigateSingleSelection = useCallback(
+    (offset: number) => {
+      if (!selectedSinglePageId) {
+        return false;
+      }
+
+      const currentIndex = pages.findIndex(
+        (page) => page.id === selectedSinglePageId,
+      );
+      if (currentIndex === -1) {
+        return false;
+      }
+
+      const nextIndex = currentIndex + offset;
+      if (nextIndex < 0 || nextIndex >= pages.length) {
+        return false;
+      }
+
+      selectSinglePage(pages[nextIndex].id);
+      return true;
+    },
+    [pages, selectSinglePage, selectedSinglePageId],
+  );
 
   const clearSelection = useCallback(() => {
     setSelectedPageIds(new Set());
@@ -249,10 +316,62 @@ export default function App() {
         return;
       }
 
+      if (e.key === "Escape" && isPreviewOpen) {
+        e.preventDefault();
+        closePreview();
+        return;
+      }
+
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "a") {
         if (pages.length > 0) {
           e.preventDefault();
           selectAllPages();
+        }
+        return;
+      }
+
+      if (
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.altKey &&
+        (e.key === "ArrowLeft" || e.key === "ArrowUp")
+      ) {
+        if (navigateSingleSelection(-1)) {
+          e.preventDefault();
+        }
+        return;
+      }
+
+      if (
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.altKey &&
+        (e.key === "ArrowRight" || e.key === "ArrowDown")
+      ) {
+        if (navigateSingleSelection(1)) {
+          e.preventDefault();
+        }
+        return;
+      }
+
+      if (!e.metaKey && !e.ctrlKey && !e.altKey && e.key === " ") {
+        if (isPreviewOpen) {
+          e.preventDefault();
+          closePreview();
+          return;
+        }
+
+        if (selectedSinglePageId) {
+          e.preventDefault();
+          openPreview();
+        }
+        return;
+      }
+
+      if (!e.metaKey && !e.ctrlKey && !e.altKey && e.key === "Enter") {
+        if (selectedSinglePageId) {
+          e.preventDefault();
+          openPreview();
         }
         return;
       }
@@ -267,7 +386,80 @@ export default function App() {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [handleRemoveSelected, pages.length, selectAllPages, selectedPageIds]);
+  }, [
+    closePreview,
+    handleRemoveSelected,
+    isPreviewOpen,
+    navigateSingleSelection,
+    openPreview,
+    openPreviewForPage,
+    pages.length,
+    selectAllPages,
+    selectedPageIds,
+    selectedSinglePageId,
+  ]);
+
+  useEffect(() => {
+    if (isPreviewOpen && !selectedSinglePage) {
+      closePreview();
+    }
+  }, [closePreview, isPreviewOpen, selectedSinglePage]);
+
+  useEffect(() => {
+    if (!isPreviewOpen || !selectedSinglePage) {
+      return;
+    }
+
+    const cachedPreviewImageUrl =
+      previewImageUrlsRef.current[selectedSinglePage.id];
+    if (cachedPreviewImageUrl) {
+      setPreviewImageUrl(cachedPreviewImageUrl);
+      setIsPreviewLoading(false);
+      return;
+    }
+
+    let isCancelled = false;
+    setPreviewImageUrl(selectedSinglePage.thumbnailUrl);
+    setIsPreviewLoading(true);
+
+    void generatePagePreview(selectedSinglePage, sourceFiles)
+      .then((generatedPreviewImageUrl) => {
+        if (!generatedPreviewImageUrl) {
+          return;
+        }
+
+        if (isCancelled) {
+          URL.revokeObjectURL(generatedPreviewImageUrl);
+          return;
+        }
+
+        previewImageUrlsRef.current[selectedSinglePage.id] =
+          generatedPreviewImageUrl;
+        setPreviewImageUrl(generatedPreviewImageUrl);
+      })
+      .catch((err) => {
+        console.error("Error generating page preview:", err);
+      })
+      .finally(() => {
+        if (!isCancelled) {
+          setIsPreviewLoading(false);
+        }
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [isPreviewOpen, selectedSinglePage, sourceFiles]);
+
+  useEffect(() => {
+    const previewImageUrls = previewImageUrlsRef.current;
+
+    return () => {
+      Object.values(previewImageUrls).forEach((previewUrl) => {
+        URL.revokeObjectURL(previewUrl);
+      });
+    };
+  }, []);
 
   useEffect(() => {
     if (viewMode !== "grid") {
@@ -589,10 +781,7 @@ export default function App() {
   ) => {
     setDraggedPageId(pageId);
     if (!selectedPageIds.has(pageId)) {
-      const nextSelectedIds = new Set([pageId]);
-      setSelectedPageIds(nextSelectedIds);
-      setSelectionAnchorId(pageId);
-      setSelectionAnchorSnapshotIds(nextSelectedIds);
+      selectSinglePage(pageId);
     }
     e.dataTransfer.effectAllowed = "move";
   };
@@ -823,6 +1012,7 @@ export default function App() {
                     onDrop={handlePageDrop}
                     onDragEnd={resetDragState}
                     onClick={(e) => handlePageClick(e, page.id)}
+                    onDoubleClick={() => openPreviewForPage(page.id)}
                     className={pageCardClassName}
                   >
                     {showIndicatorBefore && (
@@ -909,6 +1099,54 @@ export default function App() {
                 onChange={handleFileInput}
               />
             </label>
+
+            {isPreviewOpen && selectedSinglePage && (
+              <div className="preview-modal" role="dialog" aria-modal="true">
+                <div
+                  className="preview-modal__backdrop"
+                  onClick={closePreview}
+                />
+                <div className="preview-modal__panel">
+                  <button
+                    type="button"
+                    className="preview-modal__close"
+                    onClick={closePreview}
+                    aria-label="Close preview"
+                  >
+                    <X className="preview-modal__close-icon" />
+                  </button>
+                  <div className="preview-modal__meta">
+                    <div className="preview-modal__title">
+                      {sourceFiles[selectedSinglePage.fileId]?.name}
+                    </div>
+                    <div className="preview-modal__subtitle">
+                      Page{" "}
+                      {selectedSinglePage.label
+                        ? selectedSinglePage.label
+                        : selectedSinglePage.pageIndex + 1}
+                    </div>
+                  </div>
+                  <div className="preview-modal__viewport">
+                    {previewImageUrl ? (
+                      <img
+                        src={previewImageUrl}
+                        alt={`Preview of page ${selectedSinglePage.pageIndex + 1}`}
+                        className="preview-modal__image"
+                      />
+                    ) : (
+                      <div className="preview-modal__loading">
+                        Loading preview...
+                      </div>
+                    )}
+                    {isPreviewLoading && (
+                      <div className="preview-modal__status">
+                        Rendering preview...
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </main>
