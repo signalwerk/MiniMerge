@@ -143,7 +143,12 @@ export default function App() {
   const [selectedPageIds, setSelectedPageIds] = useState<Set<string>>(
     new Set(),
   );
-  const [lastSelectedId, setLastSelectedId] = useState<string | null>(null);
+  const [selectionAnchorId, setSelectionAnchorId] = useState<string | null>(
+    null,
+  );
+  const [selectionAnchorSnapshotIds, setSelectionAnchorSnapshotIds] = useState<
+    Set<string>
+  >(new Set());
   const [isProcessing, setIsProcessing] = useState(false);
   const [isDraggingFile, setIsDraggingFile] = useState(false);
   const [draggedPageId, setDraggedPageId] = useState<string | null>(null);
@@ -155,7 +160,8 @@ export default function App() {
 
   const clearSelection = useCallback(() => {
     setSelectedPageIds(new Set());
-    setLastSelectedId(null);
+    setSelectionAnchorId(null);
+    setSelectionAnchorSnapshotIds(new Set());
   }, []);
 
   const resetDragState = useCallback(() => {
@@ -213,7 +219,8 @@ export default function App() {
     }
 
     setSelectedPageIds(new Set(pages.map((page) => page.id)));
-    setLastSelectedId(pages[pages.length - 1]?.id ?? null);
+    setSelectionAnchorId(pages[pages.length - 1]?.id ?? null);
+    setSelectionAnchorSnapshotIds(new Set(pages.map((page) => page.id)));
   }, [pages]);
 
   useEffect(() => {
@@ -335,36 +342,56 @@ export default function App() {
   const handlePageClick = (e: MouseEvent, pageId: string) => {
     e.preventDefault();
     const nextSelectedIds = new Set(selectedPageIds);
+    const isToggleSelection = e.metaKey || e.ctrlKey;
+    const isRangeSelection = e.shiftKey;
 
-    if (e.shiftKey && lastSelectedId) {
-      const lastIndex = pages.findIndex((page) => page.id === lastSelectedId);
+    if (isRangeSelection) {
+      const anchorId = selectionAnchorId ?? pageId;
+      const anchorIndex = pages.findIndex((page) => page.id === anchorId);
       const currentIndex = pages.findIndex((page) => page.id === pageId);
 
-      if (lastIndex === -1 || currentIndex === -1) {
+      if (anchorIndex === -1 || currentIndex === -1) {
         return;
       }
 
-      const start = Math.min(lastIndex, currentIndex);
-      const end = Math.max(lastIndex, currentIndex);
-
-      if (!e.metaKey && !e.ctrlKey) {
-        nextSelectedIds.clear();
-      }
+      const start = Math.min(anchorIndex, currentIndex);
+      const end = Math.max(anchorIndex, currentIndex);
+      const rangeIds = new Set<string>();
+      const baseSelectionIds =
+        selectionAnchorId === null
+          ? new Set<string>()
+          : new Set(selectionAnchorSnapshotIds);
 
       for (let i = start; i <= end; i += 1) {
-        nextSelectedIds.add(pages[i].id);
+        rangeIds.add(pages[i].id);
       }
-    } else if (e.metaKey || e.ctrlKey) {
+
+      const nextRangeSelection = new Set(baseSelectionIds);
+      for (const id of rangeIds) {
+        nextRangeSelection.add(id);
+      }
+
+      setSelectedPageIds(nextRangeSelection);
+      if (!selectionAnchorId) {
+        setSelectionAnchorId(anchorId);
+        setSelectionAnchorSnapshotIds(new Set([anchorId]));
+      }
+      return;
+    }
+
+    if (isToggleSelection) {
       if (nextSelectedIds.has(pageId)) {
         nextSelectedIds.delete(pageId);
       } else {
         nextSelectedIds.add(pageId);
       }
-      setLastSelectedId(pageId);
+      setSelectionAnchorId(pageId);
+      setSelectionAnchorSnapshotIds(new Set(nextSelectedIds));
     } else {
       nextSelectedIds.clear();
       nextSelectedIds.add(pageId);
-      setLastSelectedId(pageId);
+      setSelectionAnchorId(pageId);
+      setSelectionAnchorSnapshotIds(new Set(nextSelectedIds));
     }
 
     setSelectedPageIds(nextSelectedIds);
@@ -415,8 +442,10 @@ export default function App() {
   ) => {
     setDraggedPageId(pageId);
     if (!selectedPageIds.has(pageId)) {
-      setSelectedPageIds(new Set([pageId]));
-      setLastSelectedId(pageId);
+      const nextSelectedIds = new Set([pageId]);
+      setSelectedPageIds(nextSelectedIds);
+      setSelectionAnchorId(pageId);
+      setSelectionAnchorSnapshotIds(nextSelectedIds);
     }
     e.dataTransfer.effectAllowed = "move";
   };
