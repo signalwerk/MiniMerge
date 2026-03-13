@@ -147,6 +147,8 @@ function moveSelectedPages(
 const THUMBNAIL_FLUSH_INTERVAL_MS = 500;
 const THUMBNAIL_RENDER_BATCH_SIZE = 8;
 const TOUCH_DRAG_THRESHOLD_PX = 10;
+const AUTO_SCROLL_EDGE_PX = 96;
+const AUTO_SCROLL_MAX_SPEED_PX = 24;
 
 export default function App() {
   const [pages, setPages] = useState<PdfPageNode[]>([]);
@@ -177,6 +179,7 @@ export default function App() {
   const pendingThumbnailPageIdsRef = useRef<Set<string>>(new Set());
   const isThumbnailGenerationActiveRef = useRef(false);
   const pagesRef = useRef<PdfPageNode[]>([]);
+  const viewModeRef = useRef<"grid" | "list">("grid");
   const previewImageUrlsRef = useRef<Record<string, string>>({});
   const suppressClickUntilRef = useRef(0);
   const activeTouchPointersRef = useRef<Map<number, string>>(new Map());
@@ -187,8 +190,14 @@ export default function App() {
     startY: number;
     isDragging: boolean;
   } | null>(null);
+  const autoScrollFrameRef = useRef<number | null>(null);
+  const dragPointerRef = useRef<{ clientX: number; clientY: number } | null>(
+    null,
+  );
+  const autoScrollDragModeRef = useRef<"page" | "file" | null>(null);
 
   pagesRef.current = pages;
+  viewModeRef.current = viewMode;
 
   const selectedSinglePageId =
     selectedPageIds.size === 1
@@ -292,11 +301,79 @@ export default function App() {
     setSelectionAnchorSnapshotIds(new Set());
   }, []);
 
+  const updateDropInsertionFromPointer = useCallback(
+    (clientX: number, clientY: number) => {
+      const insertionIndex = getDropInsertionIndex(
+        pageCollectionRef.current,
+        viewModeRef.current,
+        clientX,
+        clientY,
+      );
+      setDropInsertionIndex(insertionIndex ?? pagesRef.current.length);
+    },
+    [],
+  );
+
+  const stopAutoScroll = useCallback(() => {
+    autoScrollDragModeRef.current = null;
+    dragPointerRef.current = null;
+
+    if (autoScrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(autoScrollFrameRef.current);
+      autoScrollFrameRef.current = null;
+    }
+  }, []);
+
+  const runAutoScroll = useCallback(() => {
+    autoScrollFrameRef.current = null;
+
+    if (!autoScrollDragModeRef.current || !dragPointerRef.current) {
+      return;
+    }
+
+    const { clientX, clientY } = dragPointerRef.current;
+    const viewportHeight = window.innerHeight;
+    let scrollDelta = 0;
+
+    if (clientY < AUTO_SCROLL_EDGE_PX) {
+      const intensity = (AUTO_SCROLL_EDGE_PX - clientY) / AUTO_SCROLL_EDGE_PX;
+      scrollDelta = -Math.ceil(intensity * AUTO_SCROLL_MAX_SPEED_PX);
+    } else if (viewportHeight - clientY < AUTO_SCROLL_EDGE_PX) {
+      const intensity =
+        (AUTO_SCROLL_EDGE_PX - (viewportHeight - clientY)) /
+        AUTO_SCROLL_EDGE_PX;
+      scrollDelta = Math.ceil(intensity * AUTO_SCROLL_MAX_SPEED_PX);
+    }
+
+    if (scrollDelta !== 0) {
+      const previousScrollY = window.scrollY;
+      window.scrollBy(0, scrollDelta);
+      if (window.scrollY !== previousScrollY) {
+        updateDropInsertionFromPointer(clientX, clientY);
+      }
+    }
+
+    autoScrollFrameRef.current = window.requestAnimationFrame(runAutoScroll);
+  }, [updateDropInsertionFromPointer]);
+
+  const updateAutoScrollPointer = useCallback(
+    (mode: "page" | "file", clientX: number, clientY: number) => {
+      autoScrollDragModeRef.current = mode;
+      dragPointerRef.current = { clientX, clientY };
+
+      if (autoScrollFrameRef.current === null) {
+        autoScrollFrameRef.current = window.requestAnimationFrame(runAutoScroll);
+      }
+    },
+    [runAutoScroll],
+  );
+
   const resetDragState = useCallback(() => {
+    stopAutoScroll();
     setDraggedPageId(null);
     setDropInsertionIndex(null);
     setIsDraggingFile(false);
-  }, []);
+  }, [stopAutoScroll]);
 
   const processIncomingFiles = useCallback(
     async (files: File[], insertionIndex?: number | null) => {
@@ -664,16 +741,10 @@ export default function App() {
       e.preventDefault();
       e.dataTransfer.dropEffect = "copy";
       setIsDraggingFile(true);
-
-      const insertionIndex = getDropInsertionIndex(
-        pageCollectionRef.current,
-        viewMode,
-        e.clientX,
-        e.clientY,
-      );
-      setDropInsertionIndex(insertionIndex ?? pages.length);
+      updateDropInsertionFromPointer(e.clientX, e.clientY);
+      updateAutoScrollPointer("file", e.clientX, e.clientY);
     },
-    [draggedPageId, pages.length, viewMode],
+    [draggedPageId, updateAutoScrollPointer, updateDropInsertionFromPointer],
   );
 
   const handleDragLeaveFile = useCallback(
@@ -684,11 +755,12 @@ export default function App() {
       }
 
       if (!draggedPageId) {
+        stopAutoScroll();
         setIsDraggingFile(false);
         setDropInsertionIndex(null);
       }
     },
-    [draggedPageId],
+    [draggedPageId, stopAutoScroll],
   );
 
   const handleRootDrop = useCallback(
@@ -865,15 +937,16 @@ export default function App() {
       }
 
       e.preventDefault();
-      const insertionIndex = getDropInsertionIndex(
-        pageCollectionRef.current,
-        viewMode,
-        e.clientX,
-        e.clientY,
-      );
-      setDropInsertionIndex(insertionIndex ?? pages.length);
+      updateDropInsertionFromPointer(e.clientX, e.clientY);
+      updateAutoScrollPointer("page", e.clientX, e.clientY);
     },
-    [pages.length, selectSinglePage, selectedPageIds, suppressUpcomingClick, viewMode],
+    [
+      selectSinglePage,
+      selectedPageIds,
+      suppressUpcomingClick,
+      updateAutoScrollPointer,
+      updateDropInsertionFromPointer,
+    ],
   );
 
   const handlePagePointerEnd = useCallback(
@@ -979,13 +1052,8 @@ export default function App() {
     if (hasFileDrag) {
       e.dataTransfer.dropEffect = "copy";
       setIsDraggingFile(true);
-      const insertionIndex = getDropInsertionIndex(
-        pageCollectionRef.current,
-        viewMode,
-        e.clientX,
-        e.clientY,
-      );
-      setDropInsertionIndex(insertionIndex ?? pages.length);
+      updateDropInsertionFromPointer(e.clientX, e.clientY);
+      updateAutoScrollPointer("file", e.clientX, e.clientY);
       return;
     }
 
@@ -996,6 +1064,7 @@ export default function App() {
         : e.clientX < rect.left + rect.width / 2;
 
     setDropInsertionIndex(insertBefore ? pageIndex : pageIndex + 1);
+    updateAutoScrollPointer("page", e.clientX, e.clientY);
   };
 
   const handlePageCollectionDragOver = useCallback(
@@ -1016,15 +1085,14 @@ export default function App() {
         setIsDraggingFile(true);
       }
 
-      const insertionIndex = getDropInsertionIndex(
-        pageCollectionRef.current,
-        viewMode,
+      updateDropInsertionFromPointer(e.clientX, e.clientY);
+      updateAutoScrollPointer(
+        hasPageDrag ? "page" : "file",
         e.clientX,
         e.clientY,
       );
-      setDropInsertionIndex(insertionIndex ?? pages.length);
     },
-    [draggedPageId, pages.length, viewMode],
+    [draggedPageId, updateAutoScrollPointer, updateDropInsertionFromPointer],
   );
 
   const handlePageDrop = useCallback(
