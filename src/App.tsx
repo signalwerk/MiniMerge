@@ -10,6 +10,7 @@ import type {
   DragEvent,
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent,
+  PointerEvent as ReactPointerEvent,
 } from "react";
 import {
   Upload,
@@ -145,6 +146,7 @@ function moveSelectedPages(
 
 const THUMBNAIL_FLUSH_INTERVAL_MS = 500;
 const THUMBNAIL_RENDER_BATCH_SIZE = 8;
+const TOUCH_DRAG_THRESHOLD_PX = 10;
 
 export default function App() {
   const [pages, setPages] = useState<PdfPageNode[]>([]);
@@ -176,6 +178,15 @@ export default function App() {
   const isThumbnailGenerationActiveRef = useRef(false);
   const pagesRef = useRef<PdfPageNode[]>([]);
   const previewImageUrlsRef = useRef<Record<string, string>>({});
+  const suppressClickUntilRef = useRef(0);
+  const activeTouchPointersRef = useRef<Map<number, string>>(new Map());
+  const touchDragStateRef = useRef<{
+    pointerId: number;
+    pageId: string;
+    startX: number;
+    startY: number;
+    isDragging: boolean;
+  } | null>(null);
 
   pagesRef.current = pages;
 
@@ -194,6 +205,41 @@ export default function App() {
     setSelectionAnchorId(pageId);
     setSelectionAnchorSnapshotIds(nextSelectedIds);
   }, []);
+
+  const suppressUpcomingClick = useCallback((durationMs = 400) => {
+    suppressClickUntilRef.current =
+      durationMs === Number.POSITIVE_INFINITY
+        ? Number.POSITIVE_INFINITY
+        : Date.now() + durationMs;
+  }, []);
+
+  const selectRangeBetween = useCallback(
+    (anchorId: string, pageId: string, baseSelectionIds?: Set<string>) => {
+      const anchorIndex = pages.findIndex((page) => page.id === anchorId);
+      const currentIndex = pages.findIndex((page) => page.id === pageId);
+      if (anchorIndex === -1 || currentIndex === -1) {
+        return false;
+      }
+
+      const start = Math.min(anchorIndex, currentIndex);
+      const end = Math.max(anchorIndex, currentIndex);
+      const nextSelectedIds = baseSelectionIds
+        ? new Set(baseSelectionIds)
+        : new Set<string>();
+
+      for (let i = start; i <= end; i += 1) {
+        nextSelectedIds.add(pages[i].id);
+      }
+
+      setSelectedPageIds(nextSelectedIds);
+      setSelectionAnchorId(anchorId);
+      setSelectionAnchorSnapshotIds(
+        baseSelectionIds ? new Set(baseSelectionIds) : new Set([anchorId]),
+      );
+      return true;
+    },
+    [pages],
+  );
 
   const closePreview = useCallback(() => {
     setIsPreviewOpen(false);
@@ -679,6 +725,11 @@ export default function App() {
   };
 
   const handlePageClick = (e: MouseEvent, pageId: string) => {
+    if (Date.now() < suppressClickUntilRef.current) {
+      e.preventDefault();
+      return;
+    }
+
     e.preventDefault();
     const nextSelectedIds = new Set(selectedPageIds);
     const isToggleSelection = e.metaKey || e.ctrlKey;
@@ -735,6 +786,133 @@ export default function App() {
 
     setSelectedPageIds(nextSelectedIds);
   };
+
+  const handlePagePointerDown = useCallback(
+    (e: ReactPointerEvent<HTMLDivElement>, pageId: string) => {
+      if (e.pointerType !== "touch") {
+        return;
+      }
+
+      if (selectedPageIds.has(pageId)) {
+        e.preventDefault();
+      }
+
+      activeTouchPointersRef.current.set(e.pointerId, pageId);
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        // Safari may refuse pointer capture in some touch cases.
+      }
+
+      const otherActiveTouch = Array.from(activeTouchPointersRef.current.entries())
+        .find(([pointerId]) => pointerId !== e.pointerId);
+
+      if (otherActiveTouch) {
+        const [, anchorPageId] = otherActiveTouch;
+        const didSelectRange = selectRangeBetween(
+          anchorPageId,
+          pageId,
+          new Set(selectedPageIds),
+        );
+        if (didSelectRange) {
+          suppressUpcomingClick(Number.POSITIVE_INFINITY);
+        }
+        touchDragStateRef.current = null;
+        return;
+      }
+
+      touchDragStateRef.current = {
+        pointerId: e.pointerId,
+        pageId,
+        startX: e.clientX,
+        startY: e.clientY,
+        isDragging: false,
+      };
+    },
+    [selectRangeBetween, selectedPageIds, suppressUpcomingClick],
+  );
+
+  const handlePagePointerMove = useCallback(
+    (e: ReactPointerEvent<HTMLDivElement>, pageId: string) => {
+      if (e.pointerType !== "touch") {
+        return;
+      }
+
+      const touchDragState = touchDragStateRef.current;
+      if (
+        !touchDragState ||
+        touchDragState.pointerId !== e.pointerId ||
+        touchDragState.pageId !== pageId
+      ) {
+        return;
+      }
+
+      const deltaX = e.clientX - touchDragState.startX;
+      const deltaY = e.clientY - touchDragState.startY;
+      const dragDistance = Math.hypot(deltaX, deltaY);
+
+      if (!touchDragState.isDragging) {
+        if (dragDistance < TOUCH_DRAG_THRESHOLD_PX) {
+          return;
+        }
+
+        touchDragState.isDragging = true;
+        suppressUpcomingClick();
+        if (!selectedPageIds.has(pageId)) {
+          selectSinglePage(pageId);
+        }
+        setDraggedPageId(pageId);
+      }
+
+      e.preventDefault();
+      const insertionIndex = getDropInsertionIndex(
+        pageCollectionRef.current,
+        viewMode,
+        e.clientX,
+        e.clientY,
+      );
+      setDropInsertionIndex(insertionIndex ?? pages.length);
+    },
+    [pages.length, selectSinglePage, selectedPageIds, suppressUpcomingClick, viewMode],
+  );
+
+  const handlePagePointerEnd = useCallback(
+    (e: ReactPointerEvent<HTMLDivElement>) => {
+      if (e.pointerType !== "touch") {
+        return;
+      }
+
+      activeTouchPointersRef.current.delete(e.pointerId);
+      if (
+        activeTouchPointersRef.current.size === 0 &&
+        suppressClickUntilRef.current === Number.POSITIVE_INFINITY
+      ) {
+        suppressUpcomingClick(100);
+      }
+
+      const touchDragState = touchDragStateRef.current;
+      if (touchDragState && touchDragState.pointerId === e.pointerId) {
+        if (touchDragState.isDragging) {
+          e.preventDefault();
+          if (dropInsertionIndex !== null) {
+            setPages((prev) =>
+              moveSelectedPages(prev, selectedPageIds, dropInsertionIndex),
+            );
+          }
+          resetDragState();
+        }
+
+        touchDragStateRef.current = null;
+      }
+
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch {
+        // Ignore missing capture on browsers with partial support.
+      }
+    },
+    [dropInsertionIndex, resetDragState, selectedPageIds, suppressUpcomingClick],
+  );
 
   const handleContentMouseDown = useCallback(
     (e: MouseEvent<HTMLDivElement>) => {
@@ -1013,6 +1191,10 @@ export default function App() {
                     onDragEnd={resetDragState}
                     onClick={(e) => handlePageClick(e, page.id)}
                     onDoubleClick={() => openPreviewForPage(page.id)}
+                    onPointerDown={(e) => handlePagePointerDown(e, page.id)}
+                    onPointerMove={(e) => handlePagePointerMove(e, page.id)}
+                    onPointerUp={handlePagePointerEnd}
+                    onPointerCancel={handlePagePointerEnd}
                     className={pageCardClassName}
                   >
                     {showIndicatorBefore && (
